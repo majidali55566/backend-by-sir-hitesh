@@ -57,4 +57,85 @@ const registerUser = asyncHandler(async (req, res) => {
   res.status(201).json(new ApiResponse(200, user));
 });
 
-export { registerUser };
+const generateAccessTokenAndRefreshToken = async (userId) => {
+  try {
+    const user = await User.findById(userId);
+    const refreshToken = user.generateRefreshToken();
+    const accessToken = user.generateAccessToken();
+
+    user.refreshToken = refreshToken;
+    await user.save({ validateBeforeSave: false });
+
+    return { refreshToken, accessToken };
+  } catch (error) {
+    throw new ApiError(
+      500,
+      "Something went wrong while creating Access and Refresh tokens!"
+    );
+  }
+};
+
+const loginUser = asyncHandler(async (req, res) => {
+  const { password, userName, email } = req.body;
+
+  if (!userName || !email)
+    throw new ApiError(400, "user name or email is required");
+
+  const UserFounded = await User.findOne({
+    $or: [{ email }, { userName }],
+  });
+
+  if (!UserFounded) throw new ApiError(404, "User doesn't exist!");
+
+  const isPasswordValid = await UserFounded.isPasswordCorrect(password);
+  if (!isPasswordValid) throw new ApiError(401, "Invalid user credentials");
+
+  const { refreshToken, accessToken } =
+    await generateAccessTokenAndRefreshToken(UserFounded._id);
+
+  const loggedInUser = await User.findById(UserFounded._id).select(
+    "-passowrd -refreshToken"
+  );
+  const options = {
+    httpOnly: true,
+    secure: true,
+  };
+
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, options)
+    .cookie("refreshToken", refreshToken, options)
+    .json(
+      new ApiResponse(
+        200,
+        {
+          user: loggedInUser,
+          accessToken,
+          refreshToken,
+        },
+        "User loggedIn successfully!"
+      )
+    );
+});
+
+const logoutUser = asyncHandler(async (req, res) => {
+  await User.findByIdUpdate(
+    req.user._id,
+    {
+      $set: { refreshToken: undefined },
+    },
+    { new: true }
+  );
+  const options = {
+    httpOnly: true,
+    secure: true,
+  };
+
+  return res
+    .status(200)
+    .clearCookie("accessToken", options)
+    .clearCookie("refreshToken", options)
+    .json(new ApiResponse(200, {}, "User Logged out"));
+});
+
+export { registerUser, loginUser, logoutUser };
